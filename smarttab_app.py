@@ -183,15 +183,15 @@ def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> 
             if is_active:
                 if len(lines) == 2:
                     num_rect = fitz.Rect(8, y_offset + 2, MARGIN - 2, y_offset + tab_h * 0.44)
-                    page.insert_textbox(num_rect, lines[0], fontsize=7, fontname="helv", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
+                    page.insert_textbox(num_rect, lines[0], fontsize=7, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
                     t_text = lines[1]
                     if len(t_text) > 6: t_text = t_text[:5] + "…"
                     title_rect = fitz.Rect(8, y_offset + tab_h * 0.42, MARGIN - 2, y_offset + tab_h - 3)
-                    page.insert_textbox(title_rect, t_text, fontsize=6.5, fontname="helv", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
+                    page.insert_textbox(title_rect, t_text, fontsize=6.5, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
                 else:
-                    page.insert_textbox(tab_rect, label, fontsize=8, fontname="helv", color=(1,1,1), align=fitz.TEXT_ALIGN_CENTER)
+                    page.insert_textbox(tab_rect, label, fontsize=8, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_CENTER)
             else:
-                page.insert_textbox(tab_rect, lines[0], fontsize=8, fontname="helv", color=(0.30, 0.30, 0.30), align=fitz.TEXT_ALIGN_CENTER)
+                page.insert_textbox(tab_rect, lines[0], fontsize=8, fontname="japan", color=(0.30, 0.30, 0.30), align=fitz.TEXT_ALIGN_CENTER)
 
             page.insert_link({"kind": fitz.LINK_GOTO, "page": tab_start_pages[t_idx], "from": tab_rect})
             y_offset += tab_h
@@ -208,9 +208,9 @@ def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> 
                         bg.draw_rect(fitz.Rect(5, y_offset, MARGIN - 1, y_offset + sub_h))
                         bg.finish(color=ACTIVE_PAGE_COLOR, fill=ACTIVE_PAGE_COLOR)
                         bg.commit()
-                        page.insert_textbox(sub_rect, f" >p.{p}", fontsize=7, fontname="helv", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
+                        page.insert_textbox(sub_rect, f" >p.{p}", fontsize=7, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
                     else:
-                        page.insert_textbox(sub_rect, f"  p.{p}", fontsize=6.5, fontname="helv", color=(0.45,0.45,0.45), align=fitz.TEXT_ALIGN_LEFT)
+                        page.insert_textbox(sub_rect, f"  p.{p}", fontsize=6.5, fontname="japan", color=(0.45,0.45,0.45), align=fitz.TEXT_ALIGN_LEFT)
                     page.insert_link({"kind": fitz.LINK_GOTO, "page": tab_start_pages[t_idx] + p - 1, "from": sub_rect})
                     y_offset += sub_h
             y_offset += 3
