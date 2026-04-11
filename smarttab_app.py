@@ -283,13 +283,25 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-default_titles = """1.工 事 概 要
-2.計 画 工 程 表
+# ★ここが変更された初期設定です
+default_titles = """1.工事概要
+2.計画工程表
 3.現場組織表
-4.指 定 機 械
-5.主 要 機 械"""
+4.指定機械
+5.主要機械
+6.主要資材
+7.施工方法
+8.施工管理計画
+9.安全管理
+10.緊急時の体制及び対応
+11.交通管理
+12.環境対策
+13.現場作業環境の整備
+14.再生資源の利用の促進と建設副産物の適正処理方法
+15.その他"""
 
-titles_input = st.text_area("章タイトル一覧（1行に1章）", value=default_titles, height=180)
+# ★行数が増えたため、height（高さ）を180から350に増やしました
+titles_input = st.text_area("章タイトル一覧（1行に1章）", value=default_titles, height=350)
 st.divider()
 
 st.markdown('<div class="step-label">STEP 3</div>', unsafe_allow_html=True)
