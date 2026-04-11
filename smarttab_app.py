@@ -1,6 +1,5 @@
 import streamlit as st
 import fitz  # PyMuPDF
-import re
 import io
 
 # =============================================
@@ -46,6 +45,14 @@ st.markdown("""
         margin: 1rem 0;
         font-size: 0.9rem;
     }
+    .warn-box {
+        background: #fffbea;
+        border-left: 4px solid #f59e0b;
+        padding: 1rem 1.2rem;
+        border-radius: 0 8px 8px 0;
+        margin: 1rem 0;
+        font-size: 0.9rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -58,18 +65,17 @@ st.markdown("""
 
 
 # =============================================
-# テキスト正規化（スペース除去・全半角統一）
+# テキスト正規化（スペース・全半角・句読点を統一）
 # =============================================
 def normalize(text: str) -> str:
-    """スペース・全角数字・全角英数を除去して比較用に正規化する"""
     text = text.replace("　", "").replace(" ", "")
-    # 全角数字→半角
     text = text.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
-    # 全角英字→半角
     text = text.translate(str.maketrans(
         "ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ",
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
     ))
+    # 全角句読点→半角（．→. を追加）
+    text = text.replace("．", ".").replace("、", ",").replace("。", ".")
     return text.strip()
 
 
@@ -80,7 +86,6 @@ def extract_top_text(page: fitz.Page, ratio: float = 0.30) -> str:
     rect = page.rect
     top_rect = fitz.Rect(0, 0, rect.width, rect.height * ratio)
     blocks = page.get_text("blocks", clip=top_rect)
-    # y座標でソートして上から順に結合
     blocks_sorted = sorted(blocks, key=lambda b: b[1])
     lines = []
     for b in blocks_sorted:
@@ -91,11 +96,7 @@ def extract_top_text(page: fitz.Page, ratio: float = 0.30) -> str:
 # =============================================
 # 章の開始ページを検出
 # =============================================
-def detect_chapter_pages(doc: fitz.Document, titles: list[str]) -> list[dict]:
-    """
-    各章タイトルがどのページから始まるかを検出する。
-    スペース・全角差異を吸収して照合する。
-    """
+def detect_chapter_pages(doc: fitz.Document, titles: list) -> list:
     normalized_titles = [normalize(t) for t in titles]
     chapter_pages = []
 
@@ -106,7 +107,6 @@ def detect_chapter_pages(doc: fitz.Document, titles: list[str]) -> list[dict]:
 
         for idx, norm_title in enumerate(normalized_titles):
             if norm_title and norm_title in normalized_top:
-                # まだ登録されていない章のみ（最初に見つかったページを採用）
                 already = any(c["chapter_idx"] == idx for c in chapter_pages)
                 if not already:
                     chapter_pages.append({
@@ -116,7 +116,6 @@ def detect_chapter_pages(doc: fitz.Document, titles: list[str]) -> list[dict]:
                     })
                 break
 
-    # 章順にソート
     chapter_pages.sort(key=lambda x: x["chapter_idx"])
     return chapter_pages
 
@@ -124,11 +123,7 @@ def detect_chapter_pages(doc: fitz.Document, titles: list[str]) -> list[dict]:
 # =============================================
 # ページマッピングを生成
 # =============================================
-def build_page_mapping(doc: fitz.Document, chapter_pages: list[dict]) -> tuple[list, list]:
-    """
-    各ページがどの章の何ページ目かを計算する。
-    返り値: (chapters_info, page_mapping)
-    """
+def build_page_mapping(doc: fitz.Document, chapter_pages: list) -> tuple:
     total_pages = doc.page_count
     chapters_info = []
     page_mapping = []
@@ -144,7 +139,6 @@ def build_page_mapping(doc: fitz.Document, chapter_pages: list[dict]) -> tuple[l
         })
 
     for page_num in range(total_pages):
-        # どの章に属するか判定
         chapter_idx = 0
         page_in_chapter = page_num + 1
         for i, chap in enumerate(chapters_info):
@@ -161,10 +155,34 @@ def build_page_mapping(doc: fitz.Document, chapter_pages: list[dict]) -> tuple[l
 
 
 # =============================================
-# スマートタブの描画（既存ロジックを維持）
+# タブ描画・ダウンロード（共通処理）
+# =============================================
+def generate_and_download(doc: fitz.Document, chapter_pages: list):
+    chapters_info, page_mapping = build_page_mapping(doc, chapter_pages)
+    st.info("🖊️ タブを描画しています...")
+    final_doc = apply_smart_tabs(doc, chapters_info, page_mapping)
+
+    output_buffer = io.BytesIO()
+    final_doc.save(output_buffer)
+    final_doc.close()
+    output_buffer.seek(0)
+
+    st.success("✅ 生成完了！下のボタンからダウンロードしてください。")
+    st.download_button(
+        label="⬇️ タブ付きPDFをダウンロード",
+        data=output_buffer,
+        file_name="施工計画書_スマートタブ付き.pdf",
+        mime="application/pdf",
+        use_container_width=True
+    )
+
+
+# =============================================
+# スマートタブの描画
+# タブ幅を55に縮小・現在ページ記号を>に変更
 # =============================================
 def apply_smart_tabs(doc: fitz.Document, chapters: list, page_mapping: list) -> fitz.Document:
-    margin_left = 80
+    margin_left = 55  # タブ幅を狭く
 
     chapter_start_pages = [c["start_page"] for c in chapters]
 
@@ -181,26 +199,25 @@ def apply_smart_tabs(doc: fitz.Document, chapters: list, page_mapping: list) -> 
         shape.finish(color=(0.96, 0.96, 0.98), fill=(0.96, 0.96, 0.98))
         shape.commit()
 
-        y_offset = 30
-        tab_height = 40
+        y_offset = 20
+        tab_height = 30
 
         for c_idx, chapter in enumerate(chapters):
-            # 章番号（表示用）
             chapter_num = f"{c_idx + 1:02d}"
             is_current_chapter = (c_idx == current_chapter_idx)
 
-            tab_rect = fitz.Rect(5, y_offset, margin_left - 5, y_offset + tab_height)
+            tab_rect = fitz.Rect(3, y_offset, margin_left - 3, y_offset + tab_height)
             tab_shape = page.new_shape()
             tab_shape.draw_rect(tab_rect)
 
             if is_current_chapter:
                 tab_shape.finish(color=(0.1, 0.4, 0.8), fill=(0.1, 0.4, 0.8))
                 text_color = (1, 1, 1)
-                font_size = 18
+                font_size = 13
             else:
                 tab_shape.finish(color=(0.85, 0.88, 0.95), fill=(0.85, 0.88, 0.95))
                 text_color = (0.4, 0.4, 0.5)
-                font_size = 14
+                font_size = 11
 
             tab_shape.commit()
             page.insert_textbox(
@@ -216,23 +233,22 @@ def apply_smart_tabs(doc: fitz.Document, chapters: list, page_mapping: list) -> 
 
             y_offset += tab_height
 
-            # 現在の章はページ一覧も表示
             if is_current_chapter:
                 for p in range(1, chapter["pages"] + 1):
-                    sub_tab_rect = fitz.Rect(20, y_offset, margin_left - 5, y_offset + 25)
+                    sub_tab_rect = fitz.Rect(3, y_offset, margin_left - 3, y_offset + 18)
                     is_current_page = (p == current_page_in_chap)
 
                     if is_current_page:
-                        sub_color = (0.9, 0.4, 0.1)
-                        sub_font_size = 12
-                        prefix = "▶"
+                        sub_color = (0.85, 0.3, 0.05)
+                        sub_font_size = 9
+                        label = f">p.{p}"  # > 記号で現在ページを表示
                     else:
                         sub_color = (0.4, 0.4, 0.4)
-                        sub_font_size = 10
-                        prefix = " "
+                        sub_font_size = 8
+                        label = f" p.{p}"
 
                     page.insert_textbox(
-                        sub_tab_rect, f"{prefix}p.{p}",
+                        sub_tab_rect, label,
                         fontsize=sub_font_size, fontname="helv",
                         color=sub_color, align=fitz.TEXT_ALIGN_LEFT
                     )
@@ -241,9 +257,9 @@ def apply_smart_tabs(doc: fitz.Document, chapters: list, page_mapping: list) -> 
                         "page": chapter_start_pages[c_idx] + p - 1,
                         "from": sub_tab_rect
                     })
-                    y_offset += 25
+                    y_offset += 18
 
-            y_offset += 10
+            y_offset += 6
 
     return doc
 
@@ -265,21 +281,30 @@ st.markdown("#### 章タイトルの一覧を入力")
 st.markdown("""
 <div class="info-box">
 💡 各章の1ページ目にある<b>タイトル文字</b>を、1行に1つずつ入力してください。<br>
-スペースは自動で無視されるので <code>１．工 事 概 要</code> でも <code>１．工事概要</code> でも同じに扱われます。
+スペース・全角/半角・句読点の違いは自動で吸収します。
 </div>
 """, unsafe_allow_html=True)
 
-default_titles = """１．工 事 概 要
-２．工 程 計 画
-３．施 工 体 制
-４．安 全 管 理
-５．品 質 管 理"""
+default_titles = """1.工 事 概 要
+2.計 画 工 程 表
+3.現場組織表
+4.指 定 機 械
+5.主 要 機 械
+6.主 要 資 材
+7.施 工 方 法
+8.施 工 管 理 計 画
+9.安 全 管 理
+10.緊急時の体制及び対応
+11.交 通 管 理
+12.環 境 対 策
+13.現場作業環境の整備
+14.再生資源の利用の促進と建設副産物の適正処理方法
+15.そ の 他"""
 
 titles_input = st.text_area(
     "章タイトル一覧（1行に1章）",
     value=default_titles,
-    height=180,
-    placeholder="１．工 事 概 要\n２．工 程 計 画\n..."
+    height=280,
 )
 
 st.divider()
@@ -296,56 +321,64 @@ if st.button("📑 スマートタブを生成する", type="primary", use_conta
         if not titles:
             st.error("章タイトルを1つ以上入力してください。")
         else:
-            with st.spinner("処理中です..."):
-                try:
-                    pdf_bytes = uploaded_file.read()
-                    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            try:
+                pdf_bytes = uploaded_file.read()
+                doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                total_pages = doc.page_count
 
-                    # 章の開始ページを検出
-                    st.info("📖 章タイトルを検出しています...")
-                    chapter_pages = detect_chapter_pages(doc, titles)
+                st.info("📖 章タイトルを検出しています...")
+                chapter_pages = detect_chapter_pages(doc, titles)
 
-                    if not chapter_pages:
-                        st.error("章タイトルが1つも見つかりませんでした。タイトルの文字が正確に入力されているか確認してください。")
-                        st.stop()
+                if not chapter_pages:
+                    st.error("章タイトルが1つも見つかりませんでした。タイトルの文字を確認してください。")
+                    st.stop()
 
-                    # 検出結果を表示
-                    detected_titles = [c["title"] for c in chapter_pages]
-                    missing = [t for t in titles if t not in detected_titles]
+                detected_idxs = [c["chapter_idx"] for c in chapter_pages]
+                missing_titles = [(i, t) for i, t in enumerate(titles) if i not in detected_idxs]
 
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.success(f"✅ 検出された章：{len(chapter_pages)} 件")
-                        for c in chapter_pages:
-                            st.write(f"　{c['title']} → {c['start_page'] + 1}ページ目〜")
-                    with col2:
-                        if missing:
-                            st.warning(f"⚠️ 見つからなかった章：{len(missing)} 件")
-                            for m in missing:
-                                st.write(f"　{m}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.success(f"✅ 検出された章：{len(chapter_pages)} 件")
+                    for c in chapter_pages:
+                        st.write(f"　{c['title']} → {c['start_page'] + 1}ページ目〜")
+                with col2:
+                    if missing_titles:
+                        st.warning(f"⚠️ 自動検出できなかった章：{len(missing_titles)} 件")
+                        for idx, title in missing_titles:
+                            st.write(f"　{title}")
 
-                    # ページマッピング生成
-                    chapters_info, page_mapping = build_page_mapping(doc, chapter_pages)
+                if missing_titles:
+                    # 手動ページ指定フォームを表示
+                    st.markdown("""
+<div class="warn-box">
+⚠️ 自動検出できなかった章があります。<br>
+PDFを開いて確認し、<b>何ページ目から始まるか</b>を入力してください。
+</div>
+""", unsafe_allow_html=True)
 
-                    # タブ描画
-                    st.info("🖊️ タブを描画しています...")
-                    final_doc = apply_smart_tabs(doc, chapters_info, page_mapping)
+                    manual_inputs = {}
+                    for idx, title in missing_titles:
+                        manual_inputs[idx] = st.number_input(
+                            f"「{title}」の開始ページ番号（1〜{total_pages}）",
+                            min_value=1,
+                            max_value=total_pages,
+                            value=1,
+                            step=1,
+                            key=f"manual_{idx}"
+                        )
 
-                    # バイト列として出力
-                    output_buffer = io.BytesIO()
-                    final_doc.save(output_buffer)
-                    final_doc.close()
-                    output_buffer.seek(0)
+                    if st.button("✅ 手動入力を確定してタブを生成", type="primary", use_container_width=True):
+                        for idx, title in missing_titles:
+                            chapter_pages.append({
+                                "chapter_idx": idx,
+                                "title": title,
+                                "start_page": manual_inputs[idx] - 1
+                            })
+                        chapter_pages.sort(key=lambda x: x["chapter_idx"])
+                        generate_and_download(doc, chapter_pages)
+                else:
+                    generate_and_download(doc, chapter_pages)
 
-                    st.success("✅ 生成完了！下のボタンからダウンロードしてください。")
-                    st.download_button(
-                        label="⬇️ タブ付きPDFをダウンロード",
-                        data=output_buffer,
-                        file_name="施工計画書_スマートタブ付き.pdf",
-                        mime="application/pdf",
-                        use_container_width=True
-                    )
-
-                except Exception as e:
-                    st.error(f"エラーが発生しました: {e}")
-                    st.exception(e)
+            except Exception as e:
+                st.error(f"エラーが発生しました: {e}")
+                st.exception(e)
