@@ -323,7 +323,8 @@ default_titles = """1.工事概要
 15.法定休日・所定休日
 16.その他"""
 
-titles_input = st.text_area("章タイトル一覧（1行に1章）", value=default_titles, height=380)
+# ★高さを380から450に変更し、16項目がすべて見えるように調整しました
+titles_input = st.text_area("章タイトル一覧（1行に1章）", value=default_titles, height=450)
 st.divider()
 
 st.markdown('<div class="step-label">STEP 3</div>', unsafe_allow_html=True)
