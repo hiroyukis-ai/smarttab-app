@@ -150,7 +150,6 @@ def draw_3d_tab(page: fitz.Page, rect: fitz.Rect, palette: dict, is_active: bool
         shadow = fitz.Rect(x0, y1 - 1, x1, y1)
         s = page.new_shape(); s.draw_rect(shadow); s.finish(color=faded_dark, fill=faded_dark); s.commit()
 
-# ★ 大改修ポイント：ページを拡張して再構築する
 def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> fitz.Document:
     MARGIN = 72  # タブを配置する左側の余白（拡張分）
     num_tabs = len(all_tabs)
@@ -159,6 +158,8 @@ def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> 
     # 新しい空のPDFドキュメントを作成
     new_doc = fitz.open()
 
+    # ★修正ポイント：STEP 1 - まず全ページを生成してコンテンツをスタンプする
+    # （リンクを追加する前に、ジャンプ先となる全ページをnew_doc内に存在させる必要があるため）
     for i in range(doc.page_count):
         old_page = doc[i]
         old_rect = old_page.rect  # 元の用紙サイズ（回転後の見た目のサイズ）
@@ -173,9 +174,11 @@ def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> 
         # 元のページの内容を、新ページの右側（MARGINずらした位置）に貼り付け（スタンプ）
         new_page.show_pdf_page(fitz.Rect(MARGIN, 0, new_w, new_h), doc, i)
 
-        # -------------------------------------------------------------
-        # ここから、新しくできた左側の余白（0 ～ MARGIN）にタブを描画
-        # -------------------------------------------------------------
+    # ★修正ポイント：STEP 2 - 全ページが揃った後で、タブとリンクを描画していく
+    for i in range(new_doc.page_count):
+        new_page = new_doc[i]
+        new_h = new_page.rect.height
+
         current_tab_idx = page_mapping[i]["tab_idx"]
         current_page_in_tab = page_mapping[i]["page_in_tab"]
 
@@ -212,6 +215,7 @@ def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> 
             else:
                 new_page.insert_textbox(tab_rect, lines[0], fontsize=8, fontname="japan", color=(0.30, 0.30, 0.30), align=fitz.TEXT_ALIGN_CENTER)
 
+            # 新しいPDFの全ページがすでに揃っているので、ここでリンクを貼ってもエラーになりません
             new_page.insert_link({"kind": fitz.LINK_GOTO, "page": tab_start_pages[t_idx], "from": tab_rect})
             y_offset += tab_h
 
@@ -264,7 +268,6 @@ def generate_pdf(pdf_bytes: bytes, confirmed_tabs: list) -> bytes:
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     all_tabs, page_mapping = build_all_tabs_and_mapping(doc, confirmed_tabs)
     
-    # ★ ここで新しいPDF（タブ拡張版）を受け取る
     final_doc = apply_smart_tabs(doc, all_tabs, page_mapping)
     
     buf = io.BytesIO()
@@ -323,7 +326,6 @@ default_titles = """1.工事概要
 15.法定休日・所定休日
 16.その他"""
 
-# ★高さを380から450に変更し、16項目がすべて見えるように調整しました
 titles_input = st.text_area("章タイトル一覧（1行に1章）", value=default_titles, height=450)
 st.divider()
 
@@ -398,7 +400,6 @@ if st.session_state.phase == "confirm":
         </div>
         """, unsafe_allow_html=True)
 
-    # ★高さ(height)を750に設定し、18項目程度がスクロールなしで表示できるようにしました
     edited_df = st.data_editor(
         st.session_state.tabs_df,
         num_rows="dynamic",
