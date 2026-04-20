@@ -398,10 +398,12 @@ if st.session_state.phase == "confirm":
         </div>
         """, unsafe_allow_html=True)
 
+    # ★高さ(height)を750に設定し、18項目程度がスクロールなしで表示できるようにしました
     edited_df = st.data_editor(
         st.session_state.tabs_df,
         num_rows="dynamic",
         use_container_width=True,
+        height=750,
         column_config={
             "タブ名": st.column_config.TextColumn("タブ名 (改行OK)", required=True),
             "開始ページ": st.column_config.NumberColumn(
