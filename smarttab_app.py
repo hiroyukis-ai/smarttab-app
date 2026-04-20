@@ -2,7 +2,7 @@ import streamlit as st
 import fitz  # PyMuPDF
 import io
 import re
-import pandas as pd  # ★追加：表を扱うためのライブラリ
+import pandas as pd
 
 st.set_page_config(
     page_title="施工計画書 スマートタブ生成",
@@ -103,7 +103,7 @@ def extract_chapter_number(title: str) -> str:
     return None
 
 # =============================================
-# カラーパレット・描画処理 (変更なし)
+# カラーパレット・描画処理
 # =============================================
 PALETTE = [
     {"base": (0.85, 0.85, 0.80), "light": (0.95, 0.95, 0.92), "dark": (0.60, 0.60, 0.55)},
@@ -150,23 +150,42 @@ def draw_3d_tab(page: fitz.Page, rect: fitz.Rect, palette: dict, is_active: bool
         shadow = fitz.Rect(x0, y1 - 1, x1, y1)
         s = page.new_shape(); s.draw_rect(shadow); s.finish(color=faded_dark, fill=faded_dark); s.commit()
 
+# ★ 大改修ポイント：ページを拡張して再構築する
 def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> fitz.Document:
-    MARGIN = 64
+    MARGIN = 72  # タブを配置する左側の余白（拡張分）
     num_tabs = len(all_tabs)
     tab_start_pages = [t["start_page"] for t in all_tabs]
 
+    # 新しい空のPDFドキュメントを作成
+    new_doc = fitz.open()
+
     for i in range(doc.page_count):
-        page = doc[i]
-        rect = page.rect
+        old_page = doc[i]
+        old_rect = old_page.rect  # 元の用紙サイズ（回転後の見た目のサイズ）
+        
+        # 新しい用紙サイズを計算（幅をMARGIN分だけ広げる）
+        new_w = old_rect.width + MARGIN
+        new_h = old_rect.height
+        
+        # 新しいドキュメントに、回転ゼロの真っ白なページを追加
+        new_page = new_doc.new_page(width=new_w, height=new_h)
+        
+        # 元のページの内容を、新ページの右側（MARGINずらした位置）に貼り付け（スタンプ）
+        new_page.show_pdf_page(fitz.Rect(MARGIN, 0, new_w, new_h), doc, i)
+
+        # -------------------------------------------------------------
+        # ここから、新しくできた左側の余白（0 ～ MARGIN）にタブを描画
+        # -------------------------------------------------------------
         current_tab_idx = page_mapping[i]["tab_idx"]
         current_page_in_tab = page_mapping[i]["page_in_tab"]
 
-        shape = page.new_shape()
-        shape.draw_rect(fitz.Rect(0, 0, MARGIN, rect.height))
+        # 背景帯
+        shape = new_page.new_shape()
+        shape.draw_rect(fitz.Rect(0, 0, MARGIN, new_h))
         shape.finish(color=BG_COLOR, fill=BG_COLOR)
         shape.commit()
 
-        available_height = rect.height - 20
+        available_height = new_h - 20
         tab_h = min(38, available_height / max(num_tabs, 1))
         y_offset = 10
 
@@ -175,7 +194,7 @@ def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> 
             palette = get_palette(t_idx)
 
             tab_rect = fitz.Rect(3, y_offset, MARGIN - 1, y_offset + tab_h - 2)
-            draw_3d_tab(page, tab_rect, palette, is_active)
+            draw_3d_tab(new_page, tab_rect, palette, is_active)
 
             label = tab["label"]
             lines = label.split("\n")
@@ -183,39 +202,39 @@ def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> 
             if is_active:
                 if len(lines) == 2:
                     num_rect = fitz.Rect(8, y_offset + 2, MARGIN - 2, y_offset + tab_h * 0.44)
-                    page.insert_textbox(num_rect, lines[0], fontsize=7, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
+                    new_page.insert_textbox(num_rect, lines[0], fontsize=7, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
                     t_text = lines[1]
                     if len(t_text) > 6: t_text = t_text[:5] + "…"
                     title_rect = fitz.Rect(8, y_offset + tab_h * 0.42, MARGIN - 2, y_offset + tab_h - 3)
-                    page.insert_textbox(title_rect, t_text, fontsize=6.5, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
+                    new_page.insert_textbox(title_rect, t_text, fontsize=6.5, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
                 else:
-                    page.insert_textbox(tab_rect, label, fontsize=8, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_CENTER)
+                    new_page.insert_textbox(tab_rect, label, fontsize=8, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_CENTER)
             else:
-                page.insert_textbox(tab_rect, lines[0], fontsize=8, fontname="japan", color=(0.30, 0.30, 0.30), align=fitz.TEXT_ALIGN_CENTER)
+                new_page.insert_textbox(tab_rect, lines[0], fontsize=8, fontname="japan", color=(0.30, 0.30, 0.30), align=fitz.TEXT_ALIGN_CENTER)
 
-            page.insert_link({"kind": fitz.LINK_GOTO, "page": tab_start_pages[t_idx], "from": tab_rect})
+            new_page.insert_link({"kind": fitz.LINK_GOTO, "page": tab_start_pages[t_idx], "from": tab_rect})
             y_offset += tab_h
 
             if is_active:
                 tab_pages = tab.get("pages", 1)
                 for p in range(1, tab_pages + 1):
                     sub_h = 14
-                    if y_offset + sub_h > rect.height - 5: break
+                    if y_offset + sub_h > new_h - 5: break
                     sub_rect = fitz.Rect(8, y_offset, MARGIN - 2, y_offset + sub_h)
                     is_cur = (p == current_page_in_tab)
                     if is_cur:
-                        bg = page.new_shape()
+                        bg = new_page.new_shape()
                         bg.draw_rect(fitz.Rect(5, y_offset, MARGIN - 1, y_offset + sub_h))
                         bg.finish(color=ACTIVE_PAGE_COLOR, fill=ACTIVE_PAGE_COLOR)
                         bg.commit()
-                        page.insert_textbox(sub_rect, f" >p.{p}", fontsize=7, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
+                        new_page.insert_textbox(sub_rect, f" >p.{p}", fontsize=7, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
                     else:
-                        page.insert_textbox(sub_rect, f"  p.{p}", fontsize=6.5, fontname="japan", color=(0.45,0.45,0.45), align=fitz.TEXT_ALIGN_LEFT)
-                    page.insert_link({"kind": fitz.LINK_GOTO, "page": tab_start_pages[t_idx] + p - 1, "from": sub_rect})
+                        new_page.insert_textbox(sub_rect, f"  p.{p}", fontsize=6.5, fontname="japan", color=(0.45,0.45,0.45), align=fitz.TEXT_ALIGN_LEFT)
+                    new_page.insert_link({"kind": fitz.LINK_GOTO, "page": tab_start_pages[t_idx] + p - 1, "from": sub_rect})
                     y_offset += sub_h
             y_offset += 3
 
-    return doc
+    return new_doc
 
 def build_all_tabs_and_mapping(doc: fitz.Document, confirmed_tabs: list) -> tuple:
     total_pages = doc.page_count
@@ -244,10 +263,14 @@ def build_all_tabs_and_mapping(doc: fitz.Document, confirmed_tabs: list) -> tupl
 def generate_pdf(pdf_bytes: bytes, confirmed_tabs: list) -> bytes:
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     all_tabs, page_mapping = build_all_tabs_and_mapping(doc, confirmed_tabs)
+    
+    # ★ ここで新しいPDF（タブ拡張版）を受け取る
     final_doc = apply_smart_tabs(doc, all_tabs, page_mapping)
+    
     buf = io.BytesIO()
     final_doc.save(buf)
     final_doc.close()
+    doc.close()
     buf.seek(0)
     return buf.read()
 
@@ -283,7 +306,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ★ここが変更された初期設定です
 default_titles = """1.工事概要
 2.計画工程表
 3.現場組織表
@@ -301,8 +323,7 @@ default_titles = """1.工事概要
 15.法定休日・所定休日
 16.その他"""
 
-# ★行数が増えたため、height（高さ）を180から350に増やしました
-titles_input = st.text_area("章タイトル一覧（1行に1章）", value=default_titles, height=350)
+titles_input = st.text_area("章タイトル一覧（1行に1章）", value=default_titles, height=380)
 st.divider()
 
 st.markdown('<div class="step-label">STEP 3</div>', unsafe_allow_html=True)
@@ -325,7 +346,6 @@ if st.session_state.phase == "input":
                 chapter_pages = detect_chapter_pages(doc, titles)
             doc.close()
 
-            # DataFrame用のデータ作成（1ページ目：表紙、2ページ目：目次 を固定で追加）
             df_tabs = []
             df_tabs.append({"タブ名": "表紙", "開始ページ": 1})
             df_tabs.append({"タブ名": "目次", "開始ページ": 2})
@@ -340,7 +360,6 @@ if st.session_state.phase == "input":
                     "開始ページ": c["start_page"] + 1
                 })
 
-            # 見つからなかった章（仮で最終ページに割り当て）
             detected_idxs = [c["chapter_idx"] for c in chapter_pages]
             missing = [t for i, t in enumerate(titles) if i not in detected_idxs]
             for m_title in missing:
@@ -378,7 +397,6 @@ if st.session_state.phase == "confirm":
         </div>
         """, unsafe_allow_html=True)
 
-    # ★データエディタ（ここで自由に追加・削除・編集できる）
     edited_df = st.data_editor(
         st.session_state.tabs_df,
         num_rows="dynamic",
@@ -396,24 +414,22 @@ if st.session_state.phase == "confirm":
     )
 
     if st.button("📑 この構成でタブを生成する", type="primary", use_container_width=True):
-        # バリデーション：重複チェック
         pages = edited_df["開始ページ"].tolist()
         if len(pages) != len(set(pages)):
             st.error("❌ エラー: 「開始ページ」に重複があります。同じページから複数のタブを開始することはできません。（表紙と目次なども被らないようにしてください）")
             st.stop()
             
-        # 確定処理
         confirmed_tabs = []
         edited_df_sorted = edited_df.sort_values(by="開始ページ")
         for _, row in edited_df_sorted.iterrows():
             confirmed_tabs.append({
                 "label": str(row["タブ名"]),
-                "start_page": int(row["開始ページ"]) - 1  # 内部処理は0始まり
+                "start_page": int(row["開始ページ"]) - 1
             })
             
         st.session_state.confirmed_tabs = confirmed_tabs
         
-        with st.spinner("タブを描画しています..."):
+        with st.spinner("用紙を拡張してタブを描画しています...（少し時間がかかります）"):
             st.session_state.output_pdf = generate_pdf(
                 st.session_state.pdf_bytes,
                 st.session_state.confirmed_tabs
@@ -427,7 +443,7 @@ if st.session_state.phase == "confirm":
 if st.session_state.phase == "done" and st.session_state.output_pdf:
     st.success("✅ 生成完了！下のボタンからダウンロードしてください。")
     st.download_button(
-        label="⬇️ タブ付きPDFをダウンロード",
+        label="⬇️ 拡張タブ付きPDFをダウンロード",
         data=st.session_state.output_pdf,
         file_name="施工計画書_スマートタブ付き.pdf",
         mime="application/pdf",
