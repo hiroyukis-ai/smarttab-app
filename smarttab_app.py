@@ -158,30 +158,23 @@ def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> 
     # 新しい空のPDFドキュメントを作成
     new_doc = fitz.open()
 
-    # ★修正ポイント：STEP 1 - まず全ページを生成してコンテンツをスタンプし、リンクも移植する
+    # STEP 1 - まず全ページを生成してコンテンツをスタンプし、リンクも移植する
     for i in range(doc.page_count):
         old_page = doc[i]
-        old_rect = old_page.rect  # 元の用紙サイズ（回転後の見た目のサイズ）
+        old_rect = old_page.rect
         
-        # 新しい用紙サイズを計算（幅をMARGIN分だけ広げる）
         new_w = old_rect.width + MARGIN
         new_h = old_rect.height
         
-        # 新しいドキュメントに、回転ゼロの真っ白なページを追加
         new_page = new_doc.new_page(width=new_w, height=new_h)
-        
-        # 元のページの内容を、新ページの右側（MARGINずらした位置）に貼り付け（スタンプ）
         new_page.show_pdf_page(fitz.Rect(MARGIN, 0, new_w, new_h), doc, i)
 
-        # ★追加：元のページに設定されていたリンクを新しいページに移植する
         for link in old_page.get_links():
             try:
-                # リンクのクリック範囲（四角形）を右にMARGIN分ずらす
                 orig_rect = fitz.Rect(link["from"])
                 new_link_rect = orig_rect + (MARGIN, 0, MARGIN, 0)
                 link["from"] = new_link_rect
                 
-                # PDF内ジャンプの場合、ジャンプ先のX座標もMARGIN分ずらす
                 if "to" in link and isinstance(link["to"], fitz.Point):
                     link["to"] = fitz.Point(link["to"].x + MARGIN, link["to"].y)
                     
@@ -189,7 +182,7 @@ def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> 
             except Exception:
                 pass
 
-    # ★修正ポイント：STEP 2 - 全ページが揃った後で、タブを描画していく
+    # STEP 2 - 全ページが揃った後で、高さを自動調整しながらタブを描画していく
     for i in range(new_doc.page_count):
         new_page = new_doc[i]
         new_h = new_page.rect.height
@@ -203,10 +196,54 @@ def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> 
         shape.finish(color=BG_COLOR, fill=BG_COLOR)
         shape.commit()
 
-        available_height = new_h - 20
-        tab_h = min(38, available_height / max(num_tabs, 1))
+        # ----------------------------------------------------
+        # ★ここから新しい高さ最適化ロジック
+        # ----------------------------------------------------
+        gap_total = num_tabs * 3  # タブ間の隙間（3ピクセル）の合計
+        available_height = new_h - 20 - gap_total # 余白と隙間を引いた「純粋な描画可能エリア」
+        
+        active_tab_pages = all_tabs[current_tab_idx].get("pages", 1)
+        
+        min_tab_h = 24  # メインタブの最低限確保したい高さ
+        sub_tab_h = 13  # サブタブ（p.1など）の高さ
+        
+        # サブタブを表示するために使える最大の高さ
+        max_sub_height = available_height - (num_tabs * min_tab_h)
+        
+        # 用紙サイズから「何個までサブタブを表示できるか」を算出
+        allowed_sub_tabs = 0
+        if max_sub_height > 0:
+            allowed_sub_tabs = int(max_sub_height // sub_tab_h)
+            
+        display_sub_pages = []
+        if active_tab_pages > 0:
+            if active_tab_pages <= allowed_sub_tabs:
+                # 全部表示できる場合
+                display_sub_pages = list(range(1, active_tab_pages + 1))
+            elif allowed_sub_tabs > 0:
+                # はみ出す場合は、現在見ているページの周辺だけを表示（省略表示）
+                half = allowed_sub_tabs // 2
+                start_p = current_page_in_tab - half
+                end_p = start_p + allowed_sub_tabs - 1
+                if start_p < 1:
+                    start_p = 1
+                    end_p = allowed_sub_tabs
+                elif end_p > active_tab_pages:
+                    end_p = active_tab_pages
+                    start_p = end_p - allowed_sub_tabs + 1
+                    if start_p < 1: start_p = 1
+                display_sub_pages = list(range(start_p, end_p + 1))
+                
+        actual_sub_height = len(display_sub_pages) * sub_tab_h
+        
+        # 最適化されたメインタブの高さを決定（最大38）
+        tab_h = min(38, (available_height - actual_sub_height) / max(num_tabs, 1))
+        
         y_offset = 10
 
+        # ----------------------------------------------------
+        # タブの描画実行
+        # ----------------------------------------------------
         for t_idx, tab in enumerate(all_tabs):
             is_active = (t_idx == current_tab_idx)
             palette = get_palette(t_idx)
@@ -230,27 +267,23 @@ def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> 
             else:
                 new_page.insert_textbox(tab_rect, lines[0], fontsize=8, fontname="japan", color=(0.30, 0.30, 0.30), align=fitz.TEXT_ALIGN_CENTER)
 
-            # 新しいPDFの全ページがすでに揃っているので、ここでリンクを貼ってもエラーになりません
             new_page.insert_link({"kind": fitz.LINK_GOTO, "page": tab_start_pages[t_idx], "from": tab_rect})
             y_offset += tab_h
 
             if is_active:
-                tab_pages = tab.get("pages", 1)
-                for p in range(1, tab_pages + 1):
-                    sub_h = 14
-                    if y_offset + sub_h > new_h - 5: break
-                    sub_rect = fitz.Rect(8, y_offset, MARGIN - 2, y_offset + sub_h)
+                for p in display_sub_pages:
+                    sub_rect = fitz.Rect(8, y_offset, MARGIN - 2, y_offset + sub_tab_h)
                     is_cur = (p == current_page_in_tab)
                     if is_cur:
                         bg = new_page.new_shape()
-                        bg.draw_rect(fitz.Rect(5, y_offset, MARGIN - 1, y_offset + sub_h))
+                        bg.draw_rect(fitz.Rect(5, y_offset, MARGIN - 1, y_offset + sub_tab_h))
                         bg.finish(color=ACTIVE_PAGE_COLOR, fill=ACTIVE_PAGE_COLOR)
                         bg.commit()
                         new_page.insert_textbox(sub_rect, f" >p.{p}", fontsize=7, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
                     else:
                         new_page.insert_textbox(sub_rect, f"  p.{p}", fontsize=6.5, fontname="japan", color=(0.45,0.45,0.45), align=fitz.TEXT_ALIGN_LEFT)
                     new_page.insert_link({"kind": fitz.LINK_GOTO, "page": tab_start_pages[t_idx] + p - 1, "from": sub_rect})
-                    y_offset += sub_h
+                    y_offset += sub_tab_h
             y_offset += 3
 
     return new_doc
