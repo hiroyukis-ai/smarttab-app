@@ -158,8 +158,7 @@ def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> 
     # 新しい空のPDFドキュメントを作成
     new_doc = fitz.open()
 
-    # ★修正ポイント：STEP 1 - まず全ページを生成してコンテンツをスタンプする
-    # （リンクを追加する前に、ジャンプ先となる全ページをnew_doc内に存在させる必要があるため）
+    # ★修正ポイント：STEP 1 - まず全ページを生成してコンテンツをスタンプし、リンクも移植する
     for i in range(doc.page_count):
         old_page = doc[i]
         old_rect = old_page.rect  # 元の用紙サイズ（回転後の見た目のサイズ）
@@ -174,7 +173,23 @@ def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> 
         # 元のページの内容を、新ページの右側（MARGINずらした位置）に貼り付け（スタンプ）
         new_page.show_pdf_page(fitz.Rect(MARGIN, 0, new_w, new_h), doc, i)
 
-    # ★修正ポイント：STEP 2 - 全ページが揃った後で、タブとリンクを描画していく
+        # ★追加：元のページに設定されていたリンクを新しいページに移植する
+        for link in old_page.get_links():
+            try:
+                # リンクのクリック範囲（四角形）を右にMARGIN分ずらす
+                orig_rect = fitz.Rect(link["from"])
+                new_link_rect = orig_rect + (MARGIN, 0, MARGIN, 0)
+                link["from"] = new_link_rect
+                
+                # PDF内ジャンプの場合、ジャンプ先のX座標もMARGIN分ずらす
+                if "to" in link and isinstance(link["to"], fitz.Point):
+                    link["to"] = fitz.Point(link["to"].x + MARGIN, link["to"].y)
+                    
+                new_page.insert_link(link)
+            except Exception:
+                pass
+
+    # ★修正ポイント：STEP 2 - 全ページが揃った後で、タブを描画していく
     for i in range(new_doc.page_count):
         new_page = new_doc[i]
         new_h = new_page.rect.height
