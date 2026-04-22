@@ -3,6 +3,7 @@ import fitz  # PyMuPDF
 import io
 import re
 import pandas as pd
+import math  # 追加：計算用
 
 st.set_page_config(
     page_title="施工計画書 スマートタブ生成",
@@ -197,45 +198,43 @@ def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> 
         shape.commit()
 
         # ----------------------------------------------------
-        # ★ここから新しい高さ最適化ロジック
+        # ★ここから新しい高さ最適化ロジック（2列配置による完全表示）
         # ----------------------------------------------------
         gap_total = num_tabs * 3  # タブ間の隙間（3ピクセル）の合計
         available_height = new_h - 20 - gap_total # 余白と隙間を引いた「純粋な描画可能エリア」
         
         active_tab_pages = all_tabs[current_tab_idx].get("pages", 1)
         
-        min_tab_h = 24  # メインタブの最低限確保したい高さ
-        sub_tab_h = 13  # サブタブ（p.1など）の高さ
+        # サブタブを2列に分けるため、行数はページ数の半分（切り上げ）になります
+        sub_tab_rows = math.ceil(active_tab_pages / 2)
+        sub_tab_h = 12  # サブタブ1行あたりの高さ
+        actual_sub_height = sub_tab_rows * sub_tab_h
         
-        # サブタブを表示するために使える最大の高さ
-        max_sub_height = available_height - (num_tabs * min_tab_h)
+        remaining_h = available_height - actual_sub_height
         
-        # 用紙サイズから「何個までサブタブを表示できるか」を算出
-        allowed_sub_tabs = 0
-        if max_sub_height > 0:
-            allowed_sub_tabs = int(max_sub_height // sub_tab_h)
-            
         display_sub_pages = []
-        if active_tab_pages > 0:
-            if active_tab_pages <= allowed_sub_tabs:
-                # 全部表示できる場合
-                display_sub_pages = list(range(1, active_tab_pages + 1))
-            elif allowed_sub_tabs > 0:
-                # はみ出す場合は、現在見ているページの周辺だけを表示（省略表示）
-                half = allowed_sub_tabs // 2
-                start_p = current_page_in_tab - half
-                end_p = start_p + allowed_sub_tabs - 1
-                if start_p < 1:
-                    start_p = 1
-                    end_p = allowed_sub_tabs
-                elif end_p > active_tab_pages:
-                    end_p = active_tab_pages
-                    start_p = end_p - allowed_sub_tabs + 1
-                    if start_p < 1: start_p = 1
-                display_sub_pages = list(range(start_p, end_p + 1))
-                
-        actual_sub_height = len(display_sub_pages) * sub_tab_h
-        
+        # もし2列にしても異常なページ数（1章だけで100ページなど）で入らない場合のみ省略を発動
+        if remaining_h < num_tabs * 16:
+            remaining_h = num_tabs * 16
+            max_sub_height = available_height - remaining_h
+            allowed_rows = int(max_sub_height // sub_tab_h)
+            
+            allowed_pages = allowed_rows * 2
+            start_p = current_page_in_tab - (allowed_pages // 2)
+            end_p = start_p + allowed_pages - 1
+            if start_p < 1:
+                start_p = 1
+                end_p = allowed_pages
+            elif end_p > active_tab_pages:
+                end_p = active_tab_pages
+                start_p = end_p - allowed_pages + 1
+                if start_p < 1: start_p = 1
+            display_sub_pages = list(range(start_p, end_p + 1))
+            actual_sub_height = math.ceil(len(display_sub_pages) / 2) * sub_tab_h
+        else:
+            # 基本は省略せずに全部表示します！
+            display_sub_pages = list(range(1, active_tab_pages + 1))
+            
         # 最適化されたメインタブの高さを決定（最大38）
         tab_h = min(38, (available_height - actual_sub_height) / max(num_tabs, 1))
         
@@ -256,12 +255,15 @@ def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> 
 
             if is_active:
                 if len(lines) == 2:
-                    num_rect = fitz.Rect(8, y_offset + 2, MARGIN - 2, y_offset + tab_h * 0.44)
-                    new_page.insert_textbox(num_rect, lines[0], fontsize=7, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
+                    # 領域が狭い場合はフォントサイズを微調整して潰れを防ぐ
+                    f1 = 6.5 if tab_h < 24 else 7
+                    f2 = 6 if tab_h < 24 else 6.5
+                    num_rect = fitz.Rect(8, y_offset + 1, MARGIN - 2, y_offset + tab_h * 0.45)
+                    new_page.insert_textbox(num_rect, lines[0], fontsize=f1, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
                     t_text = lines[1]
                     if len(t_text) > 6: t_text = t_text[:5] + "…"
-                    title_rect = fitz.Rect(8, y_offset + tab_h * 0.42, MARGIN - 2, y_offset + tab_h - 3)
-                    new_page.insert_textbox(title_rect, t_text, fontsize=6.5, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
+                    title_rect = fitz.Rect(8, y_offset + tab_h * 0.45, MARGIN - 2, y_offset + tab_h - 1)
+                    new_page.insert_textbox(title_rect, t_text, fontsize=f2, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
                 else:
                     new_page.insert_textbox(tab_rect, label, fontsize=8, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_CENTER)
             else:
@@ -270,20 +272,33 @@ def apply_smart_tabs(doc: fitz.Document, all_tabs: list, page_mapping: list) -> 
             new_page.insert_link({"kind": fitz.LINK_GOTO, "page": tab_start_pages[t_idx], "from": tab_rect})
             y_offset += tab_h
 
+            # ★ サブタブの2列描画処理
             if is_active:
-                for p in display_sub_pages:
-                    sub_rect = fitz.Rect(8, y_offset, MARGIN - 2, y_offset + sub_tab_h)
+                for idx, p in enumerate(display_sub_pages):
+                    col = idx % 2  # 偶数は左列(0)、奇数は右列(1)
+                    row = idx // 2 # 何行目か
+                    
+                    sub_x0 = 5 if col == 0 else 38
+                    sub_x1 = 36 if col == 0 else 69
+                    
+                    curr_y = y_offset + row * sub_tab_h
+                    sub_rect = fitz.Rect(sub_x0, curr_y, sub_x1, curr_y + sub_tab_h)
+                    
                     is_cur = (p == current_page_in_tab)
                     if is_cur:
                         bg = new_page.new_shape()
-                        bg.draw_rect(fitz.Rect(5, y_offset, MARGIN - 1, y_offset + sub_tab_h))
+                        bg.draw_rect(fitz.Rect(sub_x0, curr_y, sub_x1, curr_y + sub_tab_h))
                         bg.finish(color=ACTIVE_PAGE_COLOR, fill=ACTIVE_PAGE_COLOR)
                         bg.commit()
-                        new_page.insert_textbox(sub_rect, f" >p.{p}", fontsize=7, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_LEFT)
+                        new_page.insert_textbox(sub_rect, f"p.{p}", fontsize=6.5, fontname="japan", color=(1,1,1), align=fitz.TEXT_ALIGN_CENTER)
                     else:
-                        new_page.insert_textbox(sub_rect, f"  p.{p}", fontsize=6.5, fontname="japan", color=(0.45,0.45,0.45), align=fitz.TEXT_ALIGN_LEFT)
+                        new_page.insert_textbox(sub_rect, f"p.{p}", fontsize=6.5, fontname="japan", color=(0.4,0.4,0.4), align=fitz.TEXT_ALIGN_CENTER)
+                    
                     new_page.insert_link({"kind": fitz.LINK_GOTO, "page": tab_start_pages[t_idx] + p - 1, "from": sub_rect})
-                    y_offset += sub_tab_h
+                
+                # サブタブの行数分の高さを加算して次のメインタブへ
+                y_offset += actual_sub_height
+                
             y_offset += 3
 
     return new_doc
